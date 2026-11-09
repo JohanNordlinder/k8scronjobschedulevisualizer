@@ -84,6 +84,8 @@ On Linux, a desktop session normally already has the X11/Wayland and Vulkan/GL l
 cargo test
 ```
 
+The tests cover schedule parsing (including time zones, daylight saving changes and day-of-month/day-of-week rules), the load analysis, the name filter, command-line parsing, and the cluster client. The cluster client is tested against a small fake API server, so no cluster is needed.
+
 | File | Purpose |
 |---|---|
 | `src/schedule.rs` | Cron parsing and expansion, with time zones |

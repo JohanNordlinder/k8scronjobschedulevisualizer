@@ -77,3 +77,21 @@ pub fn jobs() -> Vec<CronJobInfo> {
     out.push(CronJobInfo::new("platform-ops", "broken-schedule", "61 * * * *", None));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn demo_data_is_stable_and_mostly_valid() {
+        let a = super::jobs();
+        let b = super::jobs();
+        assert!(a.len() > 50);
+        let names = |v: &[crate::model::CronJobInfo]| v.iter().map(|j| j.full_name()).collect::<Vec<_>>();
+        assert_eq!(names(&a), names(&b), "deterministic between runs");
+        let invalid: Vec<_> = a.iter().filter(|j| j.parsed.is_err()).map(|j| j.name.as_str()).collect();
+        assert_eq!(invalid, vec!["broken-schedule"]);
+        assert!(a.iter().any(|j| j.suspended));
+        assert!(a.iter().any(|j| j.time_zone.is_some()));
+        let unique: std::collections::HashSet<_> = names(&a).into_iter().collect();
+        assert_eq!(unique.len(), a.len(), "no duplicate namespace/name");
+    }
+}

@@ -11,6 +11,7 @@ use crate::cluster;
 use crate::demo;
 use crate::model::CronJobInfo;
 
+#[derive(Debug)]
 pub struct Options {
     pub kubeconfig: Option<String>,
     pub context: Option<String>,
@@ -705,4 +706,42 @@ fn legend(ui: &mut egui::Ui, max: f32) {
         }
         ui.label(RichText::new(format!("{max:.1}")).small());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn brightness(c: Color32) -> u32 {
+        c.r() as u32 + c.g() as u32 + c.b() as u32
+    }
+
+    #[test]
+    fn heat_color_ends_and_clamps() {
+        assert_eq!(heat_color(0.0), Color32::from_rgb(38, 62, 110));
+        assert_eq!(heat_color(1.0), Color32::from_rgb(215, 38, 61));
+        assert_eq!(heat_color(-3.0), heat_color(0.0));
+        assert_eq!(heat_color(7.0), heat_color(1.0));
+        assert_eq!(heat_color(f32::NAN).a(), 255, "NaN does not panic");
+    }
+
+    #[test]
+    fn heat_color_is_smooth_from_blue_to_red() {
+        let colors: Vec<Color32> = (0..=50).map(|i| heat_color(i as f32 / 50.0)).collect();
+        for w in colors.windows(2) {
+            let d = |a: u8, b: u8| (a as i32 - b as i32).abs();
+            let step = d(w[0].r(), w[1].r()) + d(w[0].g(), w[1].g()) + d(w[0].b(), w[1].b());
+            assert!(step < 60, "jump between {:?} and {:?}", w[0], w[1]);
+        }
+        let (low, high) = (colors[0], colors[50]);
+        assert!(low.b() > low.r() && high.r() > high.b(), "blue for quiet, red for busy");
+        assert!(brightness(heat_color(0.0)) < brightness(heat_color(0.5)), "busy cells stand out");
+    }
+
+    #[test]
+    fn units_describe_window() {
+        assert_eq!(metric_unit(Metric::Starts, 1), "job starts");
+        assert_eq!(metric_unit(Metric::Starts, 7), "avg job starts per day");
+        assert_eq!(metric_unit(Metric::Running, 7), "avg jobs running");
+    }
 }

@@ -98,4 +98,27 @@ mod tests {
         assert!(!NameFilter::parse("!b").matches(&job("a", "b")));
         assert!(NameFilter::parse("!").matches(&job("a", "b")));
     }
+
+    #[test]
+    fn estimated_duration_from_status() {
+        use chrono::TimeZone;
+        let t = Utc.with_ymd_and_hms(2026, 3, 2, 10, 0, 0).unwrap();
+        let mut j = CronJobInfo::new("ns", "j", "@hourly", None);
+        assert_eq!(j.estimated_duration(), None, "no status yet");
+        j.last_schedule = Some(t);
+        assert_eq!(j.estimated_duration(), None, "never succeeded");
+        j.last_successful = Some(t + Duration::seconds(95));
+        assert_eq!(j.estimated_duration(), Some(Duration::seconds(95)));
+        j.last_successful = Some(t - Duration::minutes(5));
+        assert_eq!(j.estimated_duration(), None, "latest run hasn't finished");
+        j.last_successful = Some(t + Duration::days(2));
+        assert_eq!(j.estimated_duration(), None, "implausibly long");
+    }
+
+    #[test]
+    fn invalid_schedule_is_kept_with_error() {
+        let j = CronJobInfo::new("ns", "j", "nope", None);
+        assert!(j.parsed.is_err());
+        assert_eq!(j.full_name(), "ns/j");
+    }
 }

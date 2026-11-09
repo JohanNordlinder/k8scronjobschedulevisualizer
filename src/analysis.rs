@@ -264,4 +264,120 @@ mod tests {
         assert_eq!(a.hotspots(&heat, 1), vec![(0, 3.0)]);
         assert_eq!(a.cell_starts[60], vec![(0, 1), (1, 1), (2, 1)]);
     }
+
+    fn params(start: DateTime<Utc>, days: usize) -> Params {
+        Params {
+            window_start: start,
+            window_minutes: days * MINUTES_PER_DAY,
+            display: DisplayTz::Utc,
+            include_suspended: false,
+            default_duration_min: 1,
+            name_filter: String::new(),
+        }
+    }
+
+    fn t0() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn suspended_jobs_are_optional() {
+        let mut s = job("0 * * * *");
+        s.suspended = true;
+        let jobs = vec![s, job("30 * * * *")];
+        let a = Analysis::compute(&jobs, params(t0(), 1));
+        assert_eq!((a.suspended_skipped, a.starts[0], a.starts[30]), (1, 0, 1));
+        assert!(!a.jobs[0].included && a.jobs[0].matches_filter);
+        assert!(a.jobs[0].next_run.is_some(), "next run is still shown for suspended jobs");
+
+        let a = Analysis::compute(&jobs, Params { include_suspended: true, ..params(t0(), 1) });
+        assert_eq!((a.suspended_skipped, a.starts[0]), (0, 1));
+    }
+
+    #[test]
+    fn name_filter_removes_jobs_from_all_figures() {
+        let jobs = vec![
+            CronJobInfo::new("billing", "backup", "0 * * * *", None),
+            CronJobInfo::new("billing", "backup-test", "0 * * * *", None),
+            CronJobInfo::new("search", "reindex", "0 * * * *", None),
+            CronJobInfo::new("search", "broken", "nope", None),
+        ];
+        let a = Analysis::compute(&jobs, Params { name_filter: "backup, !test".into(), ..params(t0(), 1) });
+        assert_eq!(a.filtered_out, 3);
+        assert_eq!(a.invalid, 0, "filtered-out invalid jobs are not reported as invalid");
+        assert_eq!(a.starts[0], 1);
+        assert_eq!(a.cell_starts[0], vec![(0, 1)]);
+        let shown: Vec<bool> = a.jobs.iter().map(|j| j.matches_filter).collect();
+        assert_eq!(shown, vec![true, false, false, false]);
+    }
+
+    #[test]
+    fn runs_started_before_the_window_still_count_as_running() {
+        // Runs at 23:50 for 30 minutes, so it is still running for the first 20 minutes.
+        let mut j = job("50 23 * * *");
+        j.last_schedule = Some(t0());
+        j.last_successful = Some(t0() + Duration::minutes(30));
+        let a = Analysis::compute(&[j], params(t0(), 1));
+        assert_eq!(a.running[..20], [1; 20]);
+        assert_eq!(a.running[20], 0);
+        assert_eq!(a.starts[0], 0, "the start itself is outside the window");
+        // The run that starts at 23:50 inside the window is cut off at the end.
+        assert_eq!(a.running[MINUTES_PER_DAY - 10..], [1; 10]);
+        assert_eq!(a.jobs[0].runs, 1);
+    }
+
+    #[test]
+    fn default_duration_applies_without_history() {
+        let a = Analysis::compute(&[job("0 0 * * *")], Params { default_duration_min: 5, ..params(t0(), 1) });
+        assert_eq!(a.running[..6], [1, 1, 1, 1, 1, 0]);
+        assert!(!a.jobs[0].duration_estimated);
+        assert_eq!(a.jobs[0].duration_min, 5);
+    }
+
+    #[test]
+    fn week_window_averages_per_day() {
+        let jobs = vec![job("15 4 * * *"), job("0 12 * * 1")];
+        let a = Analysis::compute(&jobs, params(t0(), 7));
+        let heat = a.heat(Metric::Starts);
+        assert_eq!(heat[4 * 60 + 15], 1.0, "daily job: one start per day on average");
+        assert!((heat[12 * 60] - 1.0 / 7.0).abs() < 1e-6, "weekly job: 1/7 per day");
+        assert_eq!(a.cell_days.iter().copied().collect::<std::collections::HashSet<_>>().len(), 1);
+        assert_eq!(a.cell_days[0], 7);
+        assert_eq!(a.jobs[0].runs, 7);
+        assert_eq!(a.jobs[0].start_cells, vec![4 * 60 + 15], "start cells are de-duplicated");
+    }
+
+    #[test]
+    fn window_not_aligned_to_midnight() {
+        let start = t0() + Duration::minutes(10 * 60 + 7);
+        let a = Analysis::compute(&[job("0 9 * * *")], params(start, 1));
+        // 09:00 happens on the next day, 23h53m into the window.
+        assert_eq!(a.starts.iter().position(|&v| v > 0), Some(23 * 60 - 7));
+        assert_eq!(a.heat(Metric::Starts)[9 * 60], 1.0);
+        assert_eq!(a.minute_time(0), start);
+    }
+
+    #[test]
+    fn hotspots_are_sorted_truncated_and_skip_zero() {
+        let mut heat = vec![0.0; MINUTES_PER_DAY];
+        heat[10] = 2.0;
+        heat[5] = 3.0;
+        heat[20] = 2.0;
+        let a = Analysis::compute(&[], params(t0(), 1));
+        assert_eq!(a.hotspots(&heat, 10), vec![(5, 3.0), (10, 2.0), (20, 2.0)]);
+        assert_eq!(a.hotspots(&heat, 2), vec![(5, 3.0), (10, 2.0)]);
+        assert!(a.hotspots(&vec![0.0; MINUTES_PER_DAY], 5).is_empty());
+    }
+
+    #[test]
+    fn running_cells_track_which_jobs_overlap() {
+        let mut long = job("0 1 * * *");
+        long.last_schedule = Some(t0());
+        long.last_successful = Some(t0() + Duration::minutes(3));
+        let jobs = vec![long, job("2 1 * * *")];
+        let a = Analysis::compute(&jobs, params(t0(), 1));
+        assert_eq!(a.cell_jobs(Metric::Running, 60 + 2), &vec![(0, 1), (1, 1)]);
+        assert_eq!(a.cell_jobs(Metric::Starts, 60 + 2), &vec![(1, 1)]);
+        assert_eq!(a.series(Metric::Running)[60..64], [1, 1, 2, 0]);
+    }
 }

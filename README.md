@@ -45,6 +45,33 @@ cargo run --release -- --demo
 cargo run --release -- --context my-cluster --filter "backup, !test"
 ```
 
+### Building a standalone executable
+
+`cargo run` builds and starts the app in one go. To get a single executable you can copy anywhere and start without Cargo, build once:
+
+```bash
+cargo build --release
+```
+
+The executable is then at:
+
+- Windows: `target\release\cronscope.exe` (double-click it, or run it from a terminal to pass flags)
+- macOS / Linux: `target/release/cronscope`
+
+It is one self-contained file, so you can copy it to a folder on your `PATH` or anywhere else. Flags work the same way, for example:
+
+```bash
+./target/release/cronscope --context my-cluster -n my-namespace
+```
+
+```bash
+target\release\cronscope.exe --demo
+```
+
+On Windows, installing Rust through [rustup](https://rustup.rs) also asks you to install the Visual Studio C++ Build Tools ("Desktop development with C++"). Building needs them; running the finished `.exe` does not. The kubeconfig is found the same way as by `oc`: `%KUBECONFIG%`, otherwise `%USERPROFILE%\.kube\config`.
+
+### Cluster access
+
 Authentication comes from your kubeconfig, so `oc login` first. The tool uses `--kubeconfig <path>` if given, otherwise `$KUBECONFIG` (several files may be listed), otherwise `~/.kube/config`. You can also edit the path, pick a context and set a namespace in the UI, then press **Fetch**. Tokens, client certificates and exec plugins all work.
 
 Leaving the namespace empty lists CronJobs across all namespaces. That needs cluster-wide `list` on `cronjobs`, for example the `cluster-reader` role. Without it, enter a namespace.

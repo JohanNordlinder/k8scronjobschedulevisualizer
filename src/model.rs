@@ -50,3 +50,52 @@ impl CronJobInfo {
         (d >= Duration::zero() && d < Duration::days(1)).then_some(d)
     }
 }
+
+/// Filter on `namespace/name`, case-insensitive.
+///
+/// Terms are separated by commas. A job is kept if it contains at least one
+/// plain term (or there are none) and none of the `!`-prefixed terms.
+/// Example: `backup, sync, !test`.
+#[derive(Clone, Debug, Default)]
+pub struct NameFilter {
+    include: Vec<String>,
+    exclude: Vec<String>,
+}
+
+impl NameFilter {
+    pub fn parse(s: &str) -> Self {
+        let mut f = NameFilter::default();
+        for term in s.split(',').map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()) {
+            match term.strip_prefix('!') {
+                Some(rest) if !rest.trim().is_empty() => f.exclude.push(rest.trim().to_string()),
+                Some(_) => {}
+                None => f.include.push(term),
+            }
+        }
+        f
+    }
+
+    pub fn matches(&self, job: &CronJobInfo) -> bool {
+        let name = job.full_name().to_lowercase();
+        (self.include.is_empty() || self.include.iter().any(|t| name.contains(t.as_str())))
+            && !self.exclude.iter().any(|t| name.contains(t.as_str()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_filter() {
+        let job = |ns: &str, n: &str| CronJobInfo::new(ns, n, "@daily", None);
+        let f = NameFilter::parse(" Backup , sync, !test ");
+        assert!(f.matches(&job("billing", "db-backup")));
+        assert!(f.matches(&job("sync-team", "x")), "namespace is matched too");
+        assert!(!f.matches(&job("billing", "backup-test")));
+        assert!(!f.matches(&job("billing", "cleanup")));
+        assert!(NameFilter::parse("").matches(&job("a", "b")));
+        assert!(!NameFilter::parse("!b").matches(&job("a", "b")));
+        assert!(NameFilter::parse("!").matches(&job("a", "b")));
+    }
+}

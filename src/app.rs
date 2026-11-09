@@ -15,6 +15,7 @@ pub struct Options {
     pub kubeconfig: Option<String>,
     pub context: Option<String>,
     pub namespace: Option<String>,
+    pub filter: Option<String>,
     pub demo: bool,
 }
 
@@ -63,7 +64,7 @@ pub struct App {
     tab: Tab,
     selected_cell: Option<usize>,
     selected_job: Option<usize>,
-    filter: String,
+    name_filter: String,
     sort: SortKey,
 }
 
@@ -91,7 +92,7 @@ impl App {
             tab: Tab::Heatmap,
             selected_cell: None,
             selected_job: None,
-            filter: String::new(),
+            name_filter: opts.filter.unwrap_or_default(),
             sort: SortKey::Name,
         };
         if opts.demo {
@@ -185,6 +186,7 @@ impl App {
             display: self.display,
             include_suspended: self.include_suspended,
             default_duration_min: self.default_duration_min,
+            name_filter: self.name_filter.clone(),
         }
     }
 
@@ -234,6 +236,21 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
+            ui.label("Name filter");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.name_filter)
+                    .hint_text("e.g. backup, sync, !test")
+                    .desired_width(220.0),
+            )
+            .on_hover_text(
+                "Matches namespace/name, case-insensitive.\n\
+                 Separate terms with commas: a job is shown if it contains any term.\n\
+                 Prefix a term with ! to hide jobs containing it.",
+            );
+            if !self.name_filter.is_empty() && ui.small_button("✕").on_hover_text("Clear filter").clicked() {
+                self.name_filter.clear();
+            }
+            ui.separator();
             ui.label("Window");
             ui.selectable_value(&mut self.window_days, 1, "24 h");
             ui.selectable_value(&mut self.window_days, 7, "7 days");
@@ -274,10 +291,11 @@ impl App {
             };
             let included = a.jobs.iter().filter(|j| j.included).count();
             ui.label(format!(
-                "{} · {} cronjobs ({} analyzed, {} suspended skipped, {} invalid)",
+                "{} · {} cronjobs ({} analyzed, {} hidden by filter, {} suspended skipped, {} invalid)",
                 if self.source.is_empty() { "—" } else { &self.source },
                 self.jobs.len(),
                 included,
+                a.filtered_out,
                 a.suspended_skipped,
                 a.invalid
             ));
@@ -542,9 +560,6 @@ impl App {
     fn jobs_table(&mut self, ui: &mut egui::Ui) {
         let Some(a) = &self.analysis else { return };
         ui.horizontal(|ui| {
-            ui.label("Filter");
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("namespace, name or schedule").desired_width(260.0));
-            ui.separator();
             ui.label("Sort by");
             ui.selectable_value(&mut self.sort, SortKey::Name, "Name");
             ui.selectable_value(&mut self.sort, SortKey::Runs, "Runs");
@@ -553,15 +568,7 @@ impl App {
         });
         ui.add_space(4.0);
 
-        let needle = self.filter.to_lowercase();
-        let mut rows: Vec<usize> = (0..self.jobs.len())
-            .filter(|&i| {
-                let j = &self.jobs[i];
-                needle.is_empty()
-                    || j.full_name().to_lowercase().contains(&needle)
-                    || j.schedule.to_lowercase().contains(&needle)
-            })
-            .collect();
+        let mut rows: Vec<usize> = (0..self.jobs.len()).filter(|&i| a.jobs[i].matches_filter).collect();
         match self.sort {
             SortKey::Name => {}
             SortKey::Runs => rows.sort_by_key(|&i| std::cmp::Reverse(a.jobs[i].runs)),

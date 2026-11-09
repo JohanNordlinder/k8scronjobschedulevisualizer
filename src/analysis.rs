@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, Local, Timelike, Utc};
 
-use crate::model::CronJobInfo;
+use crate::model::{CronJobInfo, NameFilter};
 
 pub const MINUTES_PER_DAY: usize = 24 * 60;
 /// Upper bound on occurrences expanded per job (a `* * * * *` job over 8 days fits).
@@ -58,10 +58,15 @@ pub struct Params {
     pub include_suspended: bool,
     /// Assumed run time when the status has no finished run to learn from.
     pub default_duration_min: u32,
+    /// See [`NameFilter`]; jobs that don't match are left out entirely.
+    pub name_filter: String,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct JobStats {
+    /// Matches the name filter (shown in the job table).
+    pub matches_filter: bool,
+    /// Counted in the load figures.
     pub included: bool,
     pub runs: usize,
     pub next_run: Option<DateTime<Utc>>,
@@ -86,6 +91,7 @@ pub struct Analysis {
     pub jobs: Vec<JobStats>,
     pub invalid: usize,
     pub suspended_skipped: usize,
+    pub filtered_out: usize,
 }
 
 impl Analysis {
@@ -111,6 +117,7 @@ impl Analysis {
             jobs: Vec::with_capacity(jobs.len()),
             invalid: 0,
             suspended_skipped: 0,
+            filtered_out: 0,
             params: params.clone(),
         };
 
@@ -121,8 +128,15 @@ impl Analysis {
             }
         }
 
+        let filter = NameFilter::parse(&params.name_filter);
         for (ji, job) in jobs.iter().enumerate() {
             let mut st = JobStats::default();
+            if !filter.matches(job) {
+                a.filtered_out += 1;
+                a.jobs.push(st);
+                continue;
+            }
+            st.matches_filter = true;
             let Ok(sched) = &job.parsed else {
                 a.invalid += 1;
                 a.jobs.push(st);
@@ -238,6 +252,7 @@ mod tests {
                 display: DisplayTz::Utc,
                 include_suspended: false,
                 default_duration_min: 1,
+                name_filter: String::new(),
             },
         );
         assert_eq!(a.invalid, 1);
